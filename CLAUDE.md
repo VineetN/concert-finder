@@ -17,7 +17,7 @@ DB is SQLite, synced via Litestream → Cloudflare R2.
 - **Scheduling**: APScheduler inside `worker/worker.py`. No cron, no Celery.
 - **Process manager**: pm2 (`ecosystem.config.js`). Not systemd, not supervisor.
 - **Backend**: FastAPI + uvicorn single-process. No gunicorn (not cross-platform).
-- **Frontend**: Next.js 14 App Router + Tailwind + NextAuth v5 beta.
+- **Frontend**: Next.js 14 App Router + Tailwind + Auth.js v5 (next-auth@beta).
 - **Embeddings**: `BAAI/bge-small-en-v1.5` via `sentence-transformers` — local, CPU, ~130 MB.
   Do NOT swap this for OpenAI embeddings.
 - **"Why this match" explanations**: HuggingFace Inference API (free tier),
@@ -35,66 +35,81 @@ DB is SQLite, synced via Litestream → Cloudflare R2.
 concert-finder/
 ├── apps/api/          FastAPI backend
 │   └── src/concert_finder_api/
-│       ├── main.py              ← app setup, lifespan, CORS, router registration
+│       ├── main.py              ← app setup, lifespan, CORS; events router has NO prefix
+│       ├── db.py                ← re-exports engine/get_session/init_db from shared
 │       └── routers/
-│           ├── events.py        ← GET /events, GET /events/taste-map
+│           ├── events.py        ← GET /events, GET /events/taste-map (routes own their paths)
 │           └── user.py          ← POST /user/sync
 ├── apps/web/          Next.js 14 frontend
 │   └── src/
 │       ├── app/
-│       │   ├── page.tsx         ← home page (guarded by auth)
-│       │   └── api/auth/[...nextauth]/route.ts
-│       ├── components/EventCard.tsx
+│       │   ├── page.tsx              ← home (auth-guarded, renders <EventFeed>)
+│       │   ├── signin/page.tsx       ← Spotify sign-in button
+│       │   └── api/auth/[...nextauth]/route.ts  ← custom Auth handler (127.0.0.1 fix)
+│       ├── components/
+│       │   ├── EventCard.tsx         ← single event card with chips
+│       │   └── EventFeed.tsx         ← tabbed feed: All / Safe Bets / Stretch Picks
 │       └── lib/
-│           ├── auth.ts          ← NextAuth v5 + Spotify provider
-│           └── api.ts           ← fetchEvents(), fetchTasteMap()
-├── packages/shared/   SQLModel schemas (Artist, Event, EventArtist, UserSession)
+│           ├── auth-config.ts        ← NextAuth config (Spotify provider, JWT/session callbacks)
+│           ├── auth.ts               ← exports handlers/auth/signIn/signOut
+│           └── api.ts                ← fetchEvents(), syncUser(), fetchTasteMap()
+├── packages/shared/   SQLModel schemas + DB helpers
+│   └── src/concert_finder_shared/
+│       ├── models.py            ← Artist, Event, EventArtist, UserSession
+│       └── db.py                ← engine setup, sqlite-vec extension, init_db, get_session
 ├── packages/ingest/   Scrapers + Spotify enrichment
 │   └── src/concert_finder_ingest/
-│       ├── pipeline.py          ← orchestrates scrape → enrich → write to DB
-│       ├── enrichment.py        ← SpotifyEnricher class (fully written)
+│       ├── pipeline.py          ← COMPLETE: scrape → resolve_artists → upsert_events
+│       ├── enrichment.py        ← SpotifyEnricher: enrich_artist(), get_audio_features()
 │       └── scrapers/
 │           ├── base.py          ← BaseScraper ABC + RawEvent dataclass
-│           ├── songkick.py      ← stub (API + web fallback, TODO implement)
-│           └── neumos.py        ← stub (TODO implement)
+│           ├── songkick.py      ← COMPLETE: web scrape with pagination (API stub kept)
+│           ├── neumos.py        ← COMPLETE: selectolax HTML parser
+│           └── crocodile.py     ← COMPLETE: JSON-LD schema extraction
 ├── packages/scoring/  ML: embeddings, clustering, scoring
 │   └── src/concert_finder_scoring/
 │       ├── embeddings.py        ← build_artist_vector() — COMPLETE
-│       ├── taste.py             ← compute_taste_modes() — COMPLETE
-│       └── match.py             ← score_event(), EventCategory — COMPLETE
-└── worker/worker.py   APScheduler entry point for Node A
+│       ├── taste.py             ← compute_taste_modes() HDBSCAN/KMeans — COMPLETE
+│       └── match.py             ← score_event(), EventCategory enum — COMPLETE
+└── worker/worker.py   APScheduler; fetches fresh Spotify token before each run
 ```
 
-## What's implemented vs TODO
+## What's COMPLETE vs TODO
 
-### COMPLETE (logic written, just needs DB wiring)
-- `packages/scoring/` — all three modules are fully functional
-- `packages/ingest/enrichment.py` — SpotifyEnricher with audio feature averaging
-- `packages/shared/models.py` — all four SQLModel tables
-- `apps/web/src/lib/auth.ts` — Spotify OAuth with token persistence
-- `apps/web/src/components/EventCard.tsx` — card UI with Safe Bet / Stretch Pick chips
-- `apps/api/src/concert_finder_api/routers/` — route signatures + response models
+### Complete
+- Full DB layer (`shared/db.py`, `api/db.py`)
+- `POST /user/sync` — fetches top artists (3 time ranges), enriches, clusters, upserts
+- `GET /events` — resolves user from Bearer token, scores events, parallel HF explanations
+- Full pipeline (scrape → resolve/enrich artists → embed → upsert events)
+- Scoring engine: `match.py`, `taste.py`, `embeddings.py`
+- Scrapers: Songkick (web), Neumos, Crocodile — all returning real `RawEvent` objects
+- Worker with auto-refreshing Spotify client_credentials token
+- Full frontend: signin page, home page, `EventFeed` (tabbed + sync button), `EventCard`
+- Auth.js v5 Spotify OAuth with 127.0.0.1 workaround in `route.ts`
 
-### TODO (in priority order for v1)
-1. **DB setup**: Create SQLite + sqlite-vec DB on startup; write `db.py` helper with
-   connection management. Both api and worker need this.
-2. **`POST /user/sync`** (`routers/user.py`): Call Spotify `/me/top/artists` (all three
-   time ranges), enrich missing artists, run `compute_taste_modes()`, upsert UserSession.
-3. **`GET /events`** (`routers/events.py`): Load UserSession, score all events, sort,
-   generate explanations via HF Inference API, return ranked list.
-4. **`pipeline.py`**: Wire the `TODO` blocks — build Event + EventArtist records from
-   RawEvent, compute embeddings, upsert everything to DB.
-5. **Scrapers** (the bulk of the work — each one is isolated):
-   - Songkick web scrape fallback (API key probably unavailable)
-   - Neumos, Crocodile, Showbox SoDo, Tractor Tavern, Sunset Tavern
-   - KEXP calendar, Barboza, Chop Suey, Madame Lou's
-   - Target: ≥100 events in DB at any time
-6. **`GET /events/taste-map`**: UMAP projection of user artists + event artists.
-   Returns `{user_points, event_points}` for Plotly scatter in the frontend.
-7. **Frontend feed**: `EventFeed` component — tabbed Safe Bets / Stretch Picks,
-   calls `fetchEvents()`, renders `<EventCard>` list.
-8. **Spotify client_credentials token**: Worker needs a service account token
-   (not a user OAuth token) for enrichment. Add token refresh logic to `enrichment.py`.
+### TODO for v1
+1. **`GET /events/taste-map`** — still returns empty arrays. Needs UMAP projection of
+   user's top artists + upcoming event artists. Backend in `routers/events.py`;
+   frontend component not yet built. This is F7 in the PRD.
+2. **More scrapers** — Showbox, Tractor Tavern, Sunset Tavern, etc. are commented out in
+   `scrapers/__init__.py`. Run `just scrape` to verify current 3 scrapers hit ≥100 events
+   before adding more.
+3. **Spotify token refresh** — the JWT stores `expiresAt` but there is no silent refresh
+   logic in `auth-config.ts`. After 1h the user's access token expires and all Spotify
+   API calls (sync, resolve-user-id) will 401. For v1 dev this means re-login after 1h.
+   Fix: add refresh logic to the `jwt` callback in `auth-config.ts`.
+4. **README** — update setup instructions to reflect current env vars and auth flow.
+
+## Critical env var: AUTH_SECRET vs NEXTAUTH_SECRET
+`auth-config.ts` uses `AUTH_SECRET` (Auth.js v5 convention).
+`.env.example` currently has `NEXTAUTH_SECRET`.
+**These must match.** Rename the var in `.env.example` (and your actual `.env`) to
+`AUTH_SECRET`, or Auth.js will fail to sign sessions silently.
+
+## Routing note (don't change this)
+`main.py` includes `events.router` with **no prefix**. The routes in `events.py` own
+their own paths (`/events`, `/events/taste-map`). The user router uses prefix `/user`,
+so its route `/sync` becomes `/user/sync`. Don't add a prefix to the events router.
 
 ## Dev commands
 ```bash
@@ -114,19 +129,20 @@ just fmt
 ```
 
 ## Key env vars (see .env.example)
-- `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` — Spotify app credentials
-- `NEXTAUTH_SECRET` — random 32-byte string (`openssl rand -base64 32`)
+- `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` — used for both user OAuth AND worker enrichment
+- `AUTH_SECRET` — Auth.js v5 session signing key (`openssl rand -base64 32`)
+- `AUTH_URL` — full origin for auth callbacks, e.g. `http://127.0.0.1:3000`
 - `HF_TOKEN` — HuggingFace token for Inference API (free tier is fine)
 - `DATABASE_URL` — path to SQLite file, default `../../data/concert.db`
 - `FRONTEND_URL` — for CORS; `http://localhost:3000` in dev
 
 ## Scraper guidance
-- Use `httpx` + `selectolax` for static HTML. Only reach for `playwright` if the
-  venue site absolutely requires JS rendering.
+- Use `httpx` + `selectolax` for static HTML. Only reach for `playwright` if a venue
+  site absolutely requires JS rendering (none of the current three do).
 - Each scraper lives in `packages/ingest/src/concert_finder_ingest/scrapers/`.
   Add the class to `ALL_SCRAPERS` in `scrapers/__init__.py`.
 - Scrapers are isolated — one raising an exception doesn't abort the others.
-- `RawEvent.date_str` should be ISO 8601 where possible; `pipeline.py` normalizes.
+- `RawEvent.date_str` should be ISO 8601 where possible; `pipeline.py` normalizes it.
 
 ## Scoring thresholds
 - Safe Bet: `sim > 0.75` and matched the **dominant** taste mode
