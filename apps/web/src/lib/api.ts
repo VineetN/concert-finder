@@ -27,12 +27,12 @@ export async function fetchEvents(
   accessToken: string,
   category?: EventCategory,
 ): Promise<ScoredEvent[]> {
-  const params = new URLSearchParams({ spotify_user_id: "me" });
+  const params = new URLSearchParams();
   if (category) params.set("category", category);
 
-  const res = await fetch(`${API_BASE}/events?${params}`, {
+  const query = params.toString();
+  const res = await fetch(`${API_BASE}/events${query ? `?${query}` : ""}`, {
     headers: { Authorization: `Bearer ${accessToken}` },
-    next: { revalidate: 300 },  // re-fetch every 5 min
   });
   if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
   return res.json();

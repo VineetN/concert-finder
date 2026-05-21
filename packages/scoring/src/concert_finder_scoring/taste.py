@@ -58,7 +58,7 @@ def compute_taste_modes(
             "centroid": matrix[mask].mean(axis=0).tolist(),
             "label": f"mode_{label}",
             "artist_ids": [ids[i] for i, m in enumerate(mask) if m],
-            "is_dominant": label == dominant,
+            "is_dominant": bool(label == dominant),
         }
     return modes
 

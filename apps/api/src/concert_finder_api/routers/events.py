@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from enum import Enum
 
 import httpx
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel
 from sqlmodel import select
 
@@ -81,7 +81,7 @@ async def _explain(event: Event, driver_artist: str, driver_mode: str) -> str | 
 
 
 async def _maybe_explain(event: Event, match: MatchResult) -> str | None:
-    """Skip explanation for regular events — only safe_bet / stretch_pick get them."""
+    """Only safe_bet / stretch_pick events get LLM explanations."""
     if match.category.value == "regular":
         return None
     return await _explain(event, match.driver_artist, match.driver_mode)
@@ -93,8 +93,8 @@ def _load_and_score(
     limit: int,
 ) -> tuple[dict, list[tuple[Event, list, MatchResult]]]:
     """
-    Sync: load UserSession + upcoming events, batch-load bills, score and filter.
-    Two queries total (events, then all bills via IN) — no N+1.
+    Load UserSession + upcoming events, batch-load bills, score and filter.
+    Two queries (events, then all bills via IN) — no N+1.
     """
     with get_session() as session:
         user_session = session.get(UserSession, spotify_user_id)
@@ -139,12 +139,29 @@ def _load_and_score(
         return taste_modes, scored[:limit]
 
 
-@router.get("/", response_model=list[ScoredEvent])
+async def _resolve_spotify_id(authorization: str) -> str:
+    """Resolve Spotify user ID from the Bearer token via Spotify /me."""
+    token = authorization.removeprefix("Bearer ").strip()
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(
+            "https://api.spotify.com/v1/me",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        resp.raise_for_status()
+    return resp.json()["id"]
+
+
+@router.get("/events", response_model=list[ScoredEvent])
 async def list_events(
-    spotify_user_id: str = Query(..., description="Spotify user ID from OAuth session"),
+    authorization: str = Header(...),
     category: EventCategory | None = Query(None, description="Filter by safe_bet | stretch_pick | regular"),
     limit: int = Query(default=50, le=200),
 ) -> list[ScoredEvent]:
+    try:
+        spotify_user_id = await _resolve_spotify_id(authorization)
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=exc.response.status_code, detail="Spotify token invalid") from exc
+
     category_filter = category.value if category else None
     taste_modes, scored = await asyncio.to_thread(
         _load_and_score, spotify_user_id, category_filter, limit
@@ -153,7 +170,6 @@ async def list_events(
     if not taste_modes:
         raise HTTPException(status_code=404, detail="User not synced — call POST /user/sync first")
 
-    # Generate explanations in parallel; regular events get None without an API call
     explanations: list[str | None] = list(
         await asyncio.gather(*[_maybe_explain(event, match) for event, _, match in scored])
     )
@@ -184,8 +200,8 @@ async def list_events(
     ]
 
 
-@router.get("/taste-map")
-async def taste_map(spotify_user_id: str = Query(...)) -> dict:
+@router.get("/events/taste-map")
+async def taste_map(authorization: str = Header(...)) -> dict:
     # TODO: UMAP projection of user's top artists + upcoming event artists
     # Returns {user_points: [...], event_points: [...]} for Plotly scatter
     return {"user_points": [], "event_points": []}

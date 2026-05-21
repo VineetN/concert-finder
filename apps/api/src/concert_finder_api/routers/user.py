@@ -23,6 +23,16 @@ SPOTIFY_API = "https://api.spotify.com/v1"
 TIME_RANGES = ["short_term", "medium_term", "long_term"]
 
 
+class _NumpyEncoder(json.JSONEncoder):
+    """Convert numpy scalars/arrays to plain Python types for json.dumps."""
+    def default(self, obj: object) -> object:
+        if hasattr(obj, "item"):
+            return obj.item()
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super().default(obj)
+
+
 class TasteMode(BaseModel):
     id: str
     label: str
@@ -121,7 +131,7 @@ def _upsert_session(
         obj = session.get(UserSession, spotify_id) or UserSession(id=spotify_id)
         obj.display_name = display_name
         obj.top_artist_ids = json.dumps(top_ids)
-        obj.taste_modes = json.dumps(taste_mode_map)
+        obj.taste_modes = json.dumps(taste_mode_map, cls=_NumpyEncoder)
         obj.last_synced = datetime.utcnow()
         session.add(obj)
         session.commit()
@@ -145,10 +155,8 @@ async def sync_user(authorization: str = Header(...)) -> UserProfile:
     display_name = user.get("display_name")
     top_ids = [sa["id"] for sa in spotify_artists]
 
-    # Enrich + embed in a thread (sync httpx + SQLite + ML inference)
     artist_map = await asyncio.to_thread(_sync_artists, token, spotify_artists)
 
-    # Cluster into taste modes
     embeddings: dict[str, np.ndarray] = {
         aid: np.frombuffer(a.embedding, dtype=np.float32).copy()
         for aid, a in artist_map.items()
