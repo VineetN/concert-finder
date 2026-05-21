@@ -9,12 +9,14 @@ from datetime import datetime, timedelta
 from enum import Enum
 
 import httpx
+import numpy as np
 from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel
 from sqlmodel import select
 
 from concert_finder_api.db import get_session
 from concert_finder_scoring.match import MatchResult, score_event
+from concert_finder_scoring.project import project_to_2d
 from concert_finder_shared.models import Artist, Event, EventArtist, UserSession
 
 log = logging.getLogger(__name__)
@@ -200,8 +202,147 @@ async def list_events(
     ]
 
 
-@router.get("/events/taste-map")
-async def taste_map(authorization: str = Header(...)) -> dict:
-    # TODO: UMAP projection of user's top artists + upcoming event artists
-    # Returns {user_points: [...], event_points: [...]} for Plotly scatter
-    return {"user_points": [], "event_points": []}
+class TasteMapUserArtist(BaseModel):
+    id: str
+    name: str
+    x: float
+    y: float
+    mode_id: str
+    mode_label: str
+    is_dominant: bool
+
+
+class TasteMapEventArtist(BaseModel):
+    id: str
+    name: str
+    x: float
+    y: float
+    event_id: str
+    venue: str
+    date: str  # ISO-8601
+
+
+class TasteMapResponse(BaseModel):
+    user_artists: list[TasteMapUserArtist]
+    event_artists: list[TasteMapEventArtist]
+
+
+def _compute_taste_map(spotify_user_id: str) -> TasteMapResponse | None:
+    """
+    Load embeddings for the user's top artists + upcoming event headliners,
+    run a combined UMAP projection, and return structured 2-D coordinates.
+
+    Runs in a thread (called via asyncio.to_thread) — uses sync SQLite session.
+    """
+    with get_session() as session:
+        user_session = session.get(UserSession, spotify_user_id)
+        if not user_session or not user_session.taste_modes:
+            return None
+
+        taste_modes: dict = json.loads(user_session.taste_modes)
+        top_artist_ids: list[str] = json.loads(user_session.top_artist_ids)
+
+        # ── User's top artists ────────────────────────────────────────────────
+        user_artists_db = session.exec(
+            select(Artist).where(Artist.id.in_(top_artist_ids))
+        ).all()
+        user_art_map: dict[str, Artist] = {
+            a.id: a for a in user_artists_db if a.embedding
+        }
+
+        # ── Upcoming event headliners (billing_position == 0) ────────────────
+        now = datetime.utcnow()
+        cutoff = now + timedelta(days=LOOKAHEAD_DAYS)
+        event_rows = session.exec(
+            select(Event, EventArtist, Artist)
+            .join(EventArtist, EventArtist.event_id == Event.id)
+            .join(Artist, Artist.id == EventArtist.artist_id)
+            .where(Event.date >= now, Event.date <= cutoff)
+            .where(EventArtist.billing_position == 0)
+        ).all()
+
+        # ── Build combined embedding dict keyed by namespaced string ─────────
+        # "u:<artist_id>"          → user top artist
+        # "e:<artist_id>:<event_id>" → event headliner
+        all_embeddings: dict[str, np.ndarray] = {}
+        for aid, a in user_art_map.items():
+            all_embeddings[f"u:{aid}"] = np.frombuffer(a.embedding, dtype=np.float32).copy()  # type: ignore[arg-type]
+
+        event_meta: dict[str, tuple[Event, Artist]] = {}
+        for event, _ea, artist in event_rows:
+            if artist.embedding:
+                key = f"e:{artist.id}:{event.id}"
+                all_embeddings[key] = np.frombuffer(artist.embedding, dtype=np.float32).copy()
+                event_meta[key] = (event, artist)
+
+        if not all_embeddings:
+            return TasteMapResponse(user_artists=[], event_artists=[])
+
+        # ── UMAP / PCA projection (combined, so relative distances are meaningful) ─
+        coords = project_to_2d(all_embeddings)
+
+        # ── artist_id → (mode_id, mode_label, is_dominant) ───────────────────
+        artist_mode: dict[str, tuple[str, str, bool]] = {}
+        for mode_id, mode in taste_modes.items():
+            label = mode.get("label", mode_id)
+            dominant = bool(mode.get("is_dominant", False))
+            for aid in mode.get("artist_ids", []):
+                artist_mode[aid] = (mode_id, label, dominant)
+
+        # ── Assemble response ─────────────────────────────────────────────────
+        user_points: list[TasteMapUserArtist] = []
+        for aid, artist in user_art_map.items():
+            key = f"u:{aid}"
+            if key not in coords:
+                continue
+            x, y = coords[key]
+            mode_id, mode_label, is_dominant = artist_mode.get(aid, ("?", "unknown", False))
+            user_points.append(TasteMapUserArtist(
+                id=aid, name=artist.name,
+                x=round(x, 4), y=round(y, 4),
+                mode_id=mode_id, mode_label=mode_label,
+                is_dominant=is_dominant,
+            ))
+
+        event_points: list[TasteMapEventArtist] = []
+        seen_event_artists: set[str] = set()
+        for key, (event, artist) in event_meta.items():
+            if key not in coords:
+                continue
+            dedup_key = f"{artist.id}:{event.id}"
+            if dedup_key in seen_event_artists:
+                continue
+            seen_event_artists.add(dedup_key)
+            x, y = coords[key]
+            event_points.append(TasteMapEventArtist(
+                id=artist.id, name=artist.name,
+                x=round(x, 4), y=round(y, 4),
+                event_id=event.id, venue=event.venue,
+                date=event.date.isoformat(),
+            ))
+
+        return TasteMapResponse(user_artists=user_points, event_artists=event_points)
+
+
+@router.get("/events/taste-map", response_model=TasteMapResponse)
+async def taste_map(authorization: str = Header(...)) -> TasteMapResponse:
+    """
+    UMAP projection of the user's top artists + upcoming event headliners.
+    User points are coloured by taste-mode cluster; event diamonds show
+    spatial proximity to the user's taste modes.
+    """
+    try:
+        spotify_user_id = await _resolve_spotify_id(authorization)
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=exc.response.status_code,
+            detail="Spotify token invalid",
+        ) from exc
+
+    result = await asyncio.to_thread(_compute_taste_map, spotify_user_id)
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail="User not synced — call POST /user/sync first",
+        )
+    return result

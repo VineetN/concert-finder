@@ -78,33 +78,28 @@ concert-finder/
 
 ### Complete
 - Full DB layer (`shared/db.py`, `api/db.py`)
-- `POST /user/sync` — fetches top artists (3 time ranges), enriches, clusters, upserts
+- `POST /user/sync` — fetches top artists (3 time ranges), Last.fm genre enrichment,
+  recency-weighted clustering, upserts session
 - `GET /events` — resolves user from Bearer token, scores events, parallel HF explanations
+- `GET /events/taste-map` — UMAP projection of user's top artists + event headliners;
+  `scoring/project.py` (UMAP / PCA fallback); `TasteMap.tsx` Plotly scatter
 - Full pipeline (scrape → resolve/enrich artists → embed → upsert events)
-- Scoring engine: `match.py`, `taste.py`, `embeddings.py`
+- Scoring engine: `match.py`, `taste.py`, `embeddings.py`; calibrated thresholds (0.73/0.70)
 - Scrapers: Songkick (web), Neumos, Crocodile — all returning real `RawEvent` objects
 - Worker with auto-refreshing Spotify client_credentials token
-- Full frontend: signin page, home page, `EventFeed` (tabbed + sync button), `EventCard`
+- Full frontend: signin page, home page, `EventFeed` (tabbed + sync button), `EventCard`,
+  `TasteMap` (Plotly scatter with UMAP clusters)
 - Auth.js v5 Spotify OAuth with 127.0.0.1 workaround in `route.ts`
+- Silent Spotify token refresh in `auth-config.ts` JWT callback
 
 ### TODO for v1
-1. **`GET /events/taste-map`** — still returns empty arrays. Needs UMAP projection of
-   user's top artists + upcoming event artists. Backend in `routers/events.py`;
-   frontend component not yet built. This is F7 in the PRD.
-2. **More scrapers** — Showbox, Tractor Tavern, Sunset Tavern, etc. are commented out in
+1. **More scrapers** — Showbox, Tractor Tavern, Sunset Tavern, etc. are commented out in
    `scrapers/__init__.py`. Run `just scrape` to verify current 3 scrapers hit ≥100 events
    before adding more.
-3. **Spotify token refresh** — the JWT stores `expiresAt` but there is no silent refresh
-   logic in `auth-config.ts`. After 1h the user's access token expires and all Spotify
-   API calls (sync, resolve-user-id) will 401. For v1 dev this means re-login after 1h.
-   Fix: add refresh logic to the `jwt` callback in `auth-config.ts`.
-4. **README** — update setup instructions to reflect current env vars and auth flow.
-
-## Critical env var: AUTH_SECRET vs NEXTAUTH_SECRET
-`auth-config.ts` uses `AUTH_SECRET` (Auth.js v5 convention).
-`.env.example` currently has `NEXTAUTH_SECRET`.
-**These must match.** Rename the var in `.env.example` (and your actual `.env`) to
-`AUTH_SECRET`, or Auth.js will fail to sign sessions silently.
+2. **Scraper-discovered artists** — artists ingested via scrapers (not user sync) still use
+   old embeddings if `embedding` column was populated before the 50/50 weight change.
+   To refresh: `UPDATE artist SET embedding = NULL;` then re-run `just scrape` to
+   recompute via the pipeline's `enrich_artist()` path.
 
 ## Routing note (don't change this)
 `main.py` includes `events.router` with **no prefix**. The routes in `events.py` own

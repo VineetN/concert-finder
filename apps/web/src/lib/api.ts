@@ -46,13 +46,34 @@ export async function syncUser(accessToken: string): Promise<void> {
   if (!res.ok) throw new Error(`Sync failed ${res.status}: ${await res.text()}`);
 }
 
-export async function fetchTasteMap(accessToken: string): Promise<{
-  user_points: { x: number; y: number; label: string }[];
-  event_points: { x: number; y: number; label: string; venue: string }[];
-}> {
-  const res = await fetch(`${API_BASE}/events/taste-map?spotify_user_id=me`, {
+export interface TasteMapUserArtist {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  mode_id: string;
+  mode_label: string;
+  is_dominant: boolean;
+}
+
+export interface TasteMapEventArtist {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  event_id: string;
+  venue: string;
+  date: string;
+}
+
+export interface TasteMapData {
+  user_artists: TasteMapUserArtist[];
+  event_artists: TasteMapEventArtist[];
+}
+
+export async function fetchTasteMap(accessToken: string): Promise<TasteMapData> {
+  const res = await fetch(`${API_BASE}/events/taste-map`, {
     headers: { Authorization: `Bearer ${accessToken}` },
-    next: { revalidate: 3600 },
   });
   if (!res.ok) throw new Error(`API ${res.status}`);
   return res.json();

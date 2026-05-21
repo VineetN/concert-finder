@@ -72,7 +72,7 @@ async function proxy(req: NextRequest): Promise<NextResponse> {
   }
 
   const contentType = result.headers["content-type"] ?? "application/json";
-  return new NextResponse(result.body, {
+  return new NextResponse(new Uint8Array(result.body), {
     status: result.status,
     headers: { "content-type": contentType },
   });

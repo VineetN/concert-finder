@@ -4,19 +4,25 @@ import { useCallback, useEffect, useState } from "react";
 import * as Tabs from "@radix-ui/react-tabs";
 import { clsx } from "clsx";
 import { EventCard } from "./EventCard";
+import { TasteMap } from "./TasteMap";
 import { fetchEvents, syncUser, type ScoredEvent } from "@/lib/api";
 
 type Status = "loading" | "needs-sync" | "error" | "ready";
 
-const TABS = [
+const EVENT_TABS = [
   { value: "all",          label: "All" },
   { value: "safe_bet",     label: "Safe Bets" },
   { value: "stretch_pick", label: "Stretch Picks" },
 ] as const;
 
-type TabValue = typeof TABS[number]["value"];
+type EventTabValue = typeof EVENT_TABS[number]["value"];
 
-function partition(events: ScoredEvent[]): Record<TabValue, ScoredEvent[]> {
+const ALL_TABS = [
+  ...EVENT_TABS,
+  { value: "taste_map", label: "Taste Map" },
+] as const;
+
+function partition(events: ScoredEvent[]): Record<EventTabValue, ScoredEvent[]> {
   return {
     all:          events,
     safe_bet:     events.filter((e) => e.category === "safe_bet"),
@@ -101,29 +107,31 @@ export function EventFeed({ accessToken }: { accessToken: string }) {
   return (
     <Tabs.Root defaultValue="all">
       <div className="flex items-center justify-between border-b border-gray-800 mb-6">
-      <Tabs.List className="flex gap-1">
-        {TABS.map(({ value, label }) => {
-          const count = tabs[value].length;
-          return (
-            <Tabs.Trigger
-              key={value}
-              value={value}
-              className={clsx(
-                "px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors",
-                "border-transparent text-gray-400 hover:text-gray-200",
-                "data-[state=active]:border-white data-[state=active]:text-white",
-              )}
-            >
-              {label}
-              {count > 0 && (
-                <span className="ml-1.5 rounded-full bg-gray-800 px-1.5 py-0.5 text-xs text-gray-500">
-                  {count}
-                </span>
-              )}
-            </Tabs.Trigger>
-          );
-        })}
-      </Tabs.List>
+        <Tabs.List className="flex gap-1">
+          {ALL_TABS.map(({ value, label }) => {
+            const count = value !== "taste_map"
+              ? tabs[value as EventTabValue].length
+              : null;
+            return (
+              <Tabs.Trigger
+                key={value}
+                value={value}
+                className={clsx(
+                  "px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors",
+                  "border-transparent text-gray-400 hover:text-gray-200",
+                  "data-[state=active]:border-white data-[state=active]:text-white",
+                )}
+              >
+                {label}
+                {count != null && count > 0 && (
+                  <span className="ml-1.5 rounded-full bg-gray-800 px-1.5 py-0.5 text-xs text-gray-500">
+                    {count}
+                  </span>
+                )}
+              </Tabs.Trigger>
+            );
+          })}
+        </Tabs.List>
         <button
           onClick={handleSync}
           disabled={syncing}
@@ -133,18 +141,21 @@ export function EventFeed({ accessToken }: { accessToken: string }) {
         </button>
       </div>
 
-      {TABS.map(({ value }) => (
+      {EVENT_TABS.map(({ value, label }) => (
         <Tabs.Content key={value} value={value} className="space-y-3 outline-none">
           {tabs[value].length === 0 ? (
             <p className="py-12 text-center text-sm text-gray-600">
-              No {value === "all" ? "" : TABS.find((t) => t.value === value)?.label.toLowerCase() + " "}
-              events right now.
+              No {value === "all" ? "" : label.toLowerCase() + " "}events right now.
             </p>
           ) : (
             tabs[value].map((ev) => <EventCard key={ev.id} event={ev} />)
           )}
         </Tabs.Content>
       ))}
+
+      <Tabs.Content value="taste_map" className="outline-none">
+        <TasteMap accessToken={accessToken} />
+      </Tabs.Content>
     </Tabs.Root>
   );
 }
@@ -153,7 +164,7 @@ function EventFeedSkeleton() {
   return (
     <div className="animate-pulse space-y-3">
       <div className="flex gap-6 border-b border-gray-800 pb-2 mb-6">
-        {["All", "Safe Bets", "Stretch Picks"].map((label) => (
+        {["All", "Safe Bets", "Stretch Picks", "Taste Map"].map((label) => (
           <div key={label} className="h-5 w-20 rounded bg-gray-800" />
         ))}
       </div>
