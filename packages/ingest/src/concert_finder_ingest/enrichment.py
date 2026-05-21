@@ -38,6 +38,14 @@ class SpotifyEnricher:
 
         spotify_id, canonical_name, genres, popularity = result
 
+        # Widen genre signal with related artists' genres. Related artists are
+        # sonically adjacent by Spotify's own model, so their genre tags carry
+        # meaningful signal for embedding even when the primary artist's own
+        # tag list is sparse (e.g. many experimental/niche artists have only
+        # "experimental" as their sole genre).
+        related_genres = self.get_related_genres(spotify_id)
+        merged_genres = list(dict.fromkeys(genres + related_genres))  # primary first, deduped
+
         audio_features = None
         try:
             audio_features = self._fetch_audio_features(spotify_id)
@@ -50,7 +58,7 @@ class SpotifyEnricher:
             id=spotify_id,
             name=canonical_name,
             spotify_id=spotify_id,
-            genres=json.dumps(genres),
+            genres=json.dumps(merged_genres),
             popularity=popularity,
             audio_features=json.dumps(audio_features) if audio_features else None,
         )
@@ -64,6 +72,34 @@ class SpotifyEnricher:
                 raise
             log.debug("audio features unavailable for %s (%s)", spotify_id, exc.response.status_code)
             return None
+
+    def get_related_genres(self, spotify_id: str) -> list[str]:
+        """
+        Fetch genres from up to 5 related artists to widen the genre signal.
+
+        Spotify's related-artists endpoint returns artists that are sonically
+        and contextually adjacent. Their genre tags often include more specific
+        labels than the primary artist's own tags, improving embedding quality
+        for niche or experimental artists.
+
+        Returns a deduplicated list of genres (not including the primary artist's
+        own genres — merge at the call site). Returns [] on any API error.
+        """
+        try:
+            r = self._client.get(f"{SPOTIFY_API}/artists/{spotify_id}/related-artists")
+            r.raise_for_status()
+            related = r.json().get("artists", [])[:5]
+            genres: list[str] = []
+            seen: set[str] = set()
+            for a in related:
+                for g in a.get("genres", []):
+                    if g not in seen:
+                        genres.append(g)
+                        seen.add(g)
+            return genres
+        except Exception:
+            log.debug("Could not fetch related artists for %s", spotify_id)
+            return []
 
     def _search_artist(self, name: str) -> tuple[str, str, list, int | None] | None:
         """Search for artist by name. Returns (id, canonical_name, genres, popularity) or None."""

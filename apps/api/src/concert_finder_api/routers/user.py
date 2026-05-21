@@ -22,6 +22,16 @@ router = APIRouter()
 SPOTIFY_API = "https://api.spotify.com/v1"
 TIME_RANGES = ["short_term", "medium_term", "long_term"]
 
+# Recency weights per time range. short_term = last ~4 weeks; long_term = ~6 months.
+# These flow into compute_taste_modes() where they influence centroid position
+# and dominance ranking — a recent heavy phase carries more weight than an
+# older habit even if the older habit has more unique artists.
+TIME_RANGE_WEIGHTS: dict[str, float] = {
+    "short_term": 1.0,
+    "medium_term": 0.6,
+    "long_term": 0.3,
+}
+
 
 class _NumpyEncoder(json.JSONEncoder):
     """Convert numpy scalars/arrays to plain Python types for json.dumps."""
@@ -47,29 +57,46 @@ class UserProfile(BaseModel):
     top_artist_count: int
 
 
-async def _fetch_spotify_data(token: str) -> tuple[dict, list[dict]]:
-    """Fetch /me and /me/top/artists across all three time ranges."""
+async def _fetch_spotify_data(
+    token: str,
+) -> tuple[dict, list[dict], dict[str, float]]:
+    """Fetch /me and /me/top/artists across all three time ranges.
+
+    Returns:
+        (me_profile, deduplicated_artists, {artist_id: recency_weight})
+
+    Artists that appear in multiple time ranges keep the data from the most
+    recent range (setdefault preserves first insertion = short_term first).
+    The weight dict records the highest (most recent) weight per artist.
+    """
     headers = {"Authorization": f"Bearer {token}"}
     async with httpx.AsyncClient(headers=headers, timeout=15) as client:
         me = (await client.get(f"{SPOTIFY_API}/me")).raise_for_status().json()
 
         seen: dict[str, dict] = {}
+        artist_weights: dict[str, float] = {}
         for time_range in TIME_RANGES:
+            weight = TIME_RANGE_WEIGHTS[time_range]
             resp = await client.get(
                 f"{SPOTIFY_API}/me/top/artists",
                 params={"time_range": time_range, "limit": 50},
             )
             resp.raise_for_status()
             for artist in resp.json().get("items", []):
-                seen.setdefault(artist["id"], artist)
+                aid = artist["id"]
+                seen.setdefault(aid, artist)           # keep most-recent data
+                artist_weights.setdefault(aid, weight) # keep highest weight
 
-    return me, list(seen.values())
+    return me, list(seen.values()), artist_weights
 
 
 def _sync_artists(token: str, spotify_artists: list[dict]) -> dict[str, Artist]:
     """
-    Upsert artists into DB: create missing ones (with audio features), build
-    any missing embeddings. Runs in a thread — uses sync httpx + SQLite.
+    Upsert the user's top artists into DB. For each artist:
+      - Create record if missing, fetching audio features + related genres.
+      - Always recompute the embedding so algorithm changes (weight tuning,
+        genre selection) take effect on the next sync without a manual DB wipe.
+    Runs in a thread — uses sync httpx + SQLite.
     """
     enricher = SpotifyEnricher(token)
     try:
@@ -81,34 +108,42 @@ def _sync_artists(token: str, spotify_artists: list[dict]) -> dict[str, Artist]:
                 artist = session.get(Artist, sid)
 
                 if artist is None:
+                    # New artist: fetch audio features and widen genre signal
+                    # with related artists' genres.
+                    audio_feat: dict | None = None
                     try:
                         audio_feat = enricher.get_audio_features(sid)
                     except Exception:
                         log.warning("Could not fetch audio features for %s", sid)
-                        audio_feat = None
+
+                    base_genres: list[str] = sa.get("genres", [])
+                    related_genres = enricher.get_related_genres(sid)
+                    merged_genres = list(dict.fromkeys(base_genres + related_genres))
 
                     artist = Artist(
                         id=sid,
                         name=sa["name"],
                         spotify_id=sid,
-                        genres=json.dumps(sa.get("genres", [])),
+                        genres=json.dumps(merged_genres),
                         popularity=sa.get("popularity"),
                         audio_features=json.dumps(audio_feat) if audio_feat else None,
                         last_enriched=datetime.utcnow(),
                     )
                     session.add(artist)
 
-                if artist.embedding is None:
-                    try:
-                        vec = build_artist_vector(
-                            artist.name,
-                            json.loads(artist.genres),
-                            json.loads(artist.audio_features) if artist.audio_features else None,
-                        )
-                        artist.embedding = vec.tobytes()
-                        session.add(artist)
-                    except Exception:
-                        log.warning("Could not build embedding for %s", artist.name)
+                # Always recompute embedding for the user's own top artists so
+                # that tuning changes (_TEXT_WEIGHT, _select_genres, etc.) apply
+                # immediately on the next sync without a manual DB migration.
+                try:
+                    vec = build_artist_vector(
+                        artist.name,
+                        json.loads(artist.genres),
+                        json.loads(artist.audio_features) if artist.audio_features else None,
+                    )
+                    artist.embedding = vec.tobytes()
+                    session.add(artist)
+                except Exception:
+                    log.warning("Could not build embedding for %s", artist.name)
 
                 result[sid] = artist
 
@@ -144,7 +179,7 @@ async def sync_user(authorization: str = Header(...)) -> UserProfile:
     token = authorization.removeprefix("Bearer ")
 
     try:
-        user, spotify_artists = await _fetch_spotify_data(token)
+        user, spotify_artists, artist_weights = await _fetch_spotify_data(token)
     except httpx.HTTPStatusError as exc:
         raise HTTPException(
             status_code=exc.response.status_code,
@@ -164,7 +199,9 @@ async def sync_user(authorization: str = Header(...)) -> UserProfile:
     }
     taste_mode_map: dict = {}
     if embeddings:
-        taste_mode_map = await asyncio.to_thread(compute_taste_modes, embeddings, top_ids)
+        taste_mode_map = await asyncio.to_thread(
+            compute_taste_modes, embeddings, top_ids, artist_weights
+        )
 
     await asyncio.to_thread(_upsert_session, spotify_id, display_name, top_ids, taste_mode_map)
 

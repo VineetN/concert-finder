@@ -22,6 +22,10 @@ from __future__ import annotations
 import csv
 import json
 import sys
+
+# Force UTF-8 output on Windows consoles (cp1252 can't render box-drawing chars)
+if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -132,7 +136,7 @@ def dump_events(events: list[Event], bills: dict, taste_modes: dict) -> None:
             for _, artist in sorted(bill, key=lambda x: x[0].billing_position)
         )
         rows.append({
-            "date": event.date.strftime("%a %b %-d"),
+            "date": event.date.strftime("%a %b %d").replace(" 0", "  "),
             "venue": event.venue,
             "bill": bill_str,
             "score": f"{match.score:.3f}",
