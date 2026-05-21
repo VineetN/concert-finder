@@ -11,7 +11,7 @@ from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
 from concert_finder_api.db import get_session
-from concert_finder_ingest.enrichment import SpotifyEnricher
+from concert_finder_ingest.enrichment import LastFmEnricher, SpotifyEnricher
 from concert_finder_scoring.embeddings import build_artist_vector
 from concert_finder_scoring.taste import compute_taste_modes
 from concert_finder_shared.models import Artist, UserSession
@@ -19,8 +19,11 @@ from concert_finder_shared.models import Artist, UserSession
 log = logging.getLogger(__name__)
 router = APIRouter()
 
+import os
+
 SPOTIFY_API = "https://api.spotify.com/v1"
 TIME_RANGES = ["short_term", "medium_term", "long_term"]
+LASTFM_API_KEY = os.getenv("LASTFM_API_KEY", "")
 
 # Recency weights per time range. short_term = last ~4 weeks; long_term = ~6 months.
 # These flow into compute_taste_modes() where they influence centroid position
@@ -93,12 +96,15 @@ async def _fetch_spotify_data(
 def _sync_artists(token: str, spotify_artists: list[dict]) -> dict[str, Artist]:
     """
     Upsert the user's top artists into DB. For each artist:
-      - Create record if missing, fetching audio features + related genres.
-      - Always recompute the embedding so algorithm changes (weight tuning,
-        genre selection) take effect on the next sync without a manual DB wipe.
+      - Create record if missing.
+      - Fetch Last.fm genre tags for any artist whose genres are empty
+        (covers both new artists and existing ones enriched before Last.fm
+        was wired in). Spotify stripped genres from its API in Nov 2024.
+      - Always recompute the embedding so algorithm changes apply immediately.
     Runs in a thread — uses sync httpx + SQLite.
     """
-    enricher = SpotifyEnricher(token)
+    spotify_enricher = SpotifyEnricher(token)
+    lastfm = LastFmEnricher(LASTFM_API_KEY) if LASTFM_API_KEY else None
     try:
         with get_session() as session:
             result: dict[str, Artist] = {}
@@ -108,36 +114,39 @@ def _sync_artists(token: str, spotify_artists: list[dict]) -> dict[str, Artist]:
                 artist = session.get(Artist, sid)
 
                 if artist is None:
-                    # New artist: fetch audio features and widen genre signal
-                    # with related artists' genres.
                     audio_feat: dict | None = None
                     try:
-                        audio_feat = enricher.get_audio_features(sid)
+                        audio_feat = spotify_enricher.get_audio_features(sid)
                     except Exception:
                         log.warning("Could not fetch audio features for %s", sid)
-
-                    base_genres: list[str] = sa.get("genres", [])
-                    related_genres = enricher.get_related_genres(sid)
-                    merged_genres = list(dict.fromkeys(base_genres + related_genres))
 
                     artist = Artist(
                         id=sid,
                         name=sa["name"],
                         spotify_id=sid,
-                        genres=json.dumps(merged_genres),
+                        genres=json.dumps(sa.get("genres", [])),
                         popularity=sa.get("popularity"),
                         audio_features=json.dumps(audio_feat) if audio_feat else None,
                         last_enriched=datetime.utcnow(),
                     )
                     session.add(artist)
 
-                # Always recompute embedding for the user's own top artists so
-                # that tuning changes (_TEXT_WEIGHT, _select_genres, etc.) apply
+                # Fill empty genres from Last.fm for both new and existing artists.
+                # Spotify returns no genres since Nov 2024; Last.fm crowd-sourced
+                # tags are a direct replacement with better specificity.
+                if lastfm and not json.loads(artist.genres or "[]"):
+                    tags = lastfm.get_top_tags(artist.name)
+                    if tags:
+                        artist.genres = json.dumps(tags)
+                        session.add(artist)
+                        log.debug("Last.fm genres for %s: %s", artist.name, tags)
+
+                # Always recompute embedding so algorithm tuning changes apply
                 # immediately on the next sync without a manual DB migration.
                 try:
                     vec = build_artist_vector(
                         artist.name,
-                        json.loads(artist.genres),
+                        json.loads(artist.genres or "[]"),
                         json.loads(artist.audio_features) if artist.audio_features else None,
                     )
                     artist.embedding = vec.tobytes()
@@ -153,7 +162,9 @@ def _sync_artists(token: str, spotify_artists: list[dict]) -> dict[str, Artist]:
 
         return result
     finally:
-        enricher.close()
+        spotify_enricher.close()
+        if lastfm:
+            lastfm.close()
 
 
 def _upsert_session(

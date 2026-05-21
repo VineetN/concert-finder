@@ -4,7 +4,7 @@ import { EventFeed } from "@/components/EventFeed";
 
 export default async function Home() {
   const session = await auth();
-  if (!session) redirect("/signin");
+  if (!session || session.error === "RefreshTokenError") redirect("/signin");
 
   return (
     <main className="mx-auto max-w-2xl px-4 py-10 space-y-8">

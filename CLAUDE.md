@@ -145,7 +145,7 @@ just fmt
 - `RawEvent.date_str` should be ISO 8601 where possible; `pipeline.py` normalizes it.
 
 ## Scoring thresholds
-- Safe Bet: `sim > 0.75` and matched the **dominant** taste mode
-- Stretch Pick: `sim > 0.60` and matched a **non-dominant** taste mode
+- Safe Bet: `sim > 0.73` and matched the **dominant** taste mode
+- Stretch Pick: `sim > 0.70` and matched a **non-dominant** taste mode
 - Everything else: Regular
 - Billing weights: headliner 1.0, direct support 0.7, opener 0.5

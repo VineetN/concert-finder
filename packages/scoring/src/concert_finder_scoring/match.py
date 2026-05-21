@@ -70,8 +70,11 @@ def score_event(
 
 
 def _classify(sim: float, dominant_mode: bool) -> EventCategory:
-    if dominant_mode and sim > 0.75:
+    # Thresholds calibrated for genre-embedding space (Last.fm tags).
+    # Text-only embeddings compressed scores into a wider range; with real
+    # genre signal scores cluster in 0.65-0.84, so both bounds shift up.
+    if dominant_mode and sim > 0.73:
         return EventCategory.SAFE_BET
-    if not dominant_mode and sim > 0.60:
+    if not dominant_mode and sim > 0.70:
         return EventCategory.STRETCH_PICK
     return EventCategory.REGULAR

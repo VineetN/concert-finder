@@ -10,6 +10,14 @@ from concert_finder_shared.models import Artist
 log = logging.getLogger(__name__)
 
 SPOTIFY_API = "https://api.spotify.com/v1"
+LASTFM_API = "https://ws.audioscrobbler.com/2.0/"
+
+# Last.fm tags that carry no genre signal — usage counts, sentiment, demographics
+_LASTFM_NOISE = {
+    "seen live", "favorites", "favourite", "favourite bands", "love", "loved",
+    "awesome", "cool", "great", "epic", "check", "check out", "owned",
+    "under review", "my favorites", "favorites music",
+}
 AUDIO_FEATURE_KEYS = [
     "danceability", "energy", "valence",
     "acousticness", "instrumentalness", "speechiness", "tempo",
@@ -142,6 +150,64 @@ class SpotifyEnricher:
         avg = {k: sum(f[k] for f in features if k in f) / len(features) for k in AUDIO_FEATURE_KEYS}
         avg["tempo_norm"] = max(0.0, min(1.0, (avg.pop("tempo") - 40) / 180))
         return avg
+
+    def close(self) -> None:
+        self._client.close()
+
+
+class LastFmEnricher:
+    """Fetch crowd-sourced genre tags from Last.fm.
+
+    Spotify stripped genres from its API in Nov 2024. Last.fm's tag system
+    fills the gap: tags like "downtempo", "neo-soul", "shoegaze" come from
+    millions of listeners and provide richer genre signal than Spotify ever
+    returned for most artists.
+    """
+
+    def __init__(self, api_key: str) -> None:
+        self._api_key = api_key
+        self._client = httpx.Client(timeout=10)
+
+    def get_top_tags(self, artist_name: str, limit: int = 8) -> list[str]:
+        """Return up to `limit` genre tags for an artist, filtered of noise.
+
+        Uses autocorrect=1 so minor spelling variations still resolve.
+        Tags with fewer than 10 user applications are skipped — they're
+        too rare to carry reliable genre signal.
+        Returns [] on any API error or unknown artist.
+        """
+        try:
+            r = self._client.get(
+                LASTFM_API,
+                params={
+                    "method": "artist.gettoptags",
+                    "artist": artist_name,
+                    "api_key": self._api_key,
+                    "format": "json",
+                    "autocorrect": 1,
+                },
+            )
+            r.raise_for_status()
+            data = r.json()
+            if "error" in data:
+                log.debug("Last.fm error for %r: %s", artist_name, data.get("message"))
+                return []
+            tags = data.get("toptags", {}).get("tag", [])
+            result: list[str] = []
+            for tag in tags:
+                name = tag.get("name", "").lower().strip()
+                count = int(tag.get("count", 0))
+                if count < 10:
+                    continue
+                if name in _LASTFM_NOISE or len(name) < 2:
+                    continue
+                result.append(name)
+                if len(result) >= limit:
+                    break
+            return result
+        except Exception:
+            log.debug("Last.fm lookup failed for %r", artist_name)
+            return []
 
     def close(self) -> None:
         self._client.close()

@@ -100,7 +100,8 @@ export function EventFeed({ accessToken }: { accessToken: string }) {
 
   return (
     <Tabs.Root defaultValue="all">
-      <Tabs.List className="flex gap-1 border-b border-gray-800 mb-6">
+      <div className="flex items-center justify-between border-b border-gray-800 mb-6">
+      <Tabs.List className="flex gap-1">
         {TABS.map(({ value, label }) => {
           const count = tabs[value].length;
           return (
@@ -123,6 +124,14 @@ export function EventFeed({ accessToken }: { accessToken: string }) {
           );
         })}
       </Tabs.List>
+        <button
+          onClick={handleSync}
+          disabled={syncing}
+          className="text-xs text-gray-500 hover:text-gray-300 disabled:opacity-40 transition-colors pb-2"
+        >
+          {syncing ? "Syncing…" : "Re-sync"}
+        </button>
+      </div>
 
       {TABS.map(({ value }) => (
         <Tabs.Content key={value} value={value} className="space-y-3 outline-none">
