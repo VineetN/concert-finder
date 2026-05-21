@@ -24,9 +24,9 @@ def _parse_tractor_date(text: str) -> str | None:
     """Parse 'May 21 @ 08:00 PM' → ISO date, handling year rollover."""
     date_part = text.split("@")[0].strip()
     now = datetime.now()
-    for fmt in ("%B %d", "%b %d"):
+    for fmt in ("%B %d %Y", "%b %d %Y"):
         try:
-            dt = datetime.strptime(date_part, fmt).replace(year=now.year)
+            dt = datetime.strptime(f"{date_part} {now.year}", fmt)
             if dt.date() < now.date() - timedelta(days=1):
                 dt = dt.replace(year=dt.year + 1)
             return dt.date().isoformat()
