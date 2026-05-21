@@ -1,0 +1,87 @@
+# Concert Finder
+
+> Seattle live music ranked to your taste — not the algorithm's.
+
+Pulls upcoming Seattle shows, enriches every artist on the bill with Spotify metadata, clusters your listening history into 2–4 taste modes, and scores events by predicted enjoyment. Surfaces **safe bets** (strong match to your dominant taste) and **stretch picks** (strong match to a secondary taste, or artists adjacent to your library you haven't seen live).
+
+## Stack
+
+| Layer | Choice |
+|-------|--------|
+| Python env | `uv` workspaces |
+| Backend | FastAPI + uvicorn |
+| Frontend | Next.js 14 (App Router) + Tailwind + shadcn |
+| Database | SQLite + `sqlite-vec` |
+| DB sync | Litestream → Cloudflare R2 |
+| Embeddings | `BAAI/bge-small-en-v1.5` (local, CPU) |
+| Clustering | HDBSCAN → KMeans fallback |
+| Scheduling | APScheduler (in-process) |
+| Process mgmt | pm2 |
+| Auth | NextAuth v5 (Spotify provider) |
+
+## Two-node setup
+
+```
+Node A (ingestion)          Node B (serving)
+─────────────────           ──────────────────
+scraper worker              FastAPI + Next.js
+  ↓ nightly 3am PT            ↓ reads from DB
+SQLite DB  ──→ Litestream ──→ R2 ──→ restored on Node B
+```
+
+If Node A is down, Node B keeps serving stale data.
+If Node B is down, ingestion still runs.
+
+## Prerequisites
+
+- Python 3.11+, [`uv`](https://docs.astral.sh/uv/getting-started/installation/)
+- Node 20+, [`pnpm`](https://pnpm.io/installation) (`npm i -g pnpm`)
+- [`just`](https://just.systems/man/en/packages.html)
+- Spotify developer app → [create one](https://developer.spotify.com/dashboard)
+
+## Setup
+
+```bash
+git clone https://github.com/YOUR_USERNAME/concert-finder
+cd concert-finder
+just install
+cp .env.example .env   # fill in SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, NEXTAUTH_SECRET
+```
+
+Add `http://localhost:3000/api/auth/callback/spotify` to your Spotify app's redirect URIs.
+
+## Running (dev)
+
+```bash
+just api      # FastAPI on :8000
+just web      # Next.js on :3000
+just scrape   # run ingestion pipeline once immediately
+```
+
+## Project structure
+
+```
+concert-finder/
+├── apps/
+│   ├── api/          # FastAPI backend
+│   └── web/          # Next.js frontend
+├── packages/
+│   ├── ingest/       # scrapers + Spotify enrichment
+│   ├── scoring/      # taste clustering + match scoring
+│   └── shared/       # SQLModel schemas (shared types)
+├── worker/           # APScheduler entry point (Node A)
+├── infra/            # Litestream config, Tailscale notes
+└── data/             # SQLite DB (gitignored — synced via Litestream)
+```
+
+## Scoring
+
+Each event is scored against each of the user's taste modes (HDBSCAN clusters of their Spotify top artists). Final score = max cosine similarity across all (artist × mode) pairs, weighted by billing position (headliner 1.0 / direct support 0.7 / opener 0.5).
+
+- **Safe Bet** — sim > 0.75 against dominant taste mode
+- **Stretch Pick** — sim > 0.60 against a secondary mode
+- **Regular** — everything else
+
+## License
+
+MIT

@@ -1,0 +1,11 @@
+dbs:
+  - path: ${LITESTREAM_DB_PATH:-../../data/concert.db}
+    replicas:
+      - type: s3
+        endpoint: ${R2_ENDPOINT}
+        bucket: ${R2_BUCKET}
+        access-key-id: ${R2_ACCESS_KEY_ID}
+        secret-access-key: ${R2_SECRET_ACCESS_KEY}
+        # Retain 7 days of snapshots
+        retention: 168h
+        retention-check-interval: 1h
