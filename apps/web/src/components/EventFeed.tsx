@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import * as Tabs from "@radix-ui/react-tabs";
 import { clsx } from "clsx";
 import { EventCard } from "./EventCard";
@@ -35,6 +36,7 @@ export function EventFeed({ accessToken }: { accessToken: string }) {
   const [status, setStatus]   = useState<Status>("loading");
   const [error,  setError]    = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const router = useRouter();
 
   const load = useCallback(async () => {
     setStatus("loading");
@@ -45,6 +47,10 @@ export function EventFeed({ accessToken }: { accessToken: string }) {
       setStatus("ready");
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("401")) {
+        router.push("/signin");
+        return;
+      }
       if (msg.includes("404")) {
         setStatus("needs-sync");
       } else {
@@ -52,7 +58,7 @@ export function EventFeed({ accessToken }: { accessToken: string }) {
         setStatus("error");
       }
     }
-  }, [accessToken]);
+  }, [accessToken, router]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -62,7 +68,12 @@ export function EventFeed({ accessToken }: { accessToken: string }) {
       await syncUser(accessToken);
       await load();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Sync failed");
+      const msg = err instanceof Error ? err.message : "Sync failed";
+      if (msg.includes("401")) {
+        router.push("/signin");
+        return;
+      }
+      setError(msg);
       setStatus("error");
     } finally {
       setSyncing(false);

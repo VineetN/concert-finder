@@ -27,11 +27,11 @@ export async function fetchEvents(
   accessToken: string,
   category?: EventCategory,
 ): Promise<ScoredEvent[]> {
-  const params = new URLSearchParams();
+  const params = new URLSearchParams({ limit: "200" });
   if (category) params.set("category", category);
 
   const query = params.toString();
-  const res = await fetch(`${API_BASE}/events${query ? `?${query}` : ""}`, {
+  const res = await fetch(`${API_BASE}/events?${query}`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);

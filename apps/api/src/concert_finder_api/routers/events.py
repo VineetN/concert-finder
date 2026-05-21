@@ -157,7 +157,7 @@ async def _resolve_spotify_id(authorization: str) -> str:
 async def list_events(
     authorization: str = Header(...),
     category: EventCategory | None = Query(None, description="Filter by safe_bet | stretch_pick | regular"),
-    limit: int = Query(default=50, le=200),
+    limit: int = Query(default=200, le=200),
 ) -> list[ScoredEvent]:
     try:
         spotify_user_id = await _resolve_spotify_id(authorization)
