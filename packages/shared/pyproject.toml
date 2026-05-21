@@ -5,6 +5,7 @@ requires-python = ">=3.11"
 dependencies = [
     "sqlmodel>=0.0.19",
     "pydantic>=2.7",
+    "sqlite-vec>=0.1",
 ]
 
 [build-system]
