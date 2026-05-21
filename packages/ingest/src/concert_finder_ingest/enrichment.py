@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 
 import httpx
@@ -36,9 +37,9 @@ class SpotifyEnricher:
             id=spotify_id,
             name=artist_data["name"],
             spotify_id=spotify_id,
-            genres=str(artist_data.get("genres", [])),
+            genres=json.dumps(artist_data.get("genres", [])),
             popularity=artist_data.get("popularity"),
-            audio_features=str(audio_features) if audio_features else None,
+            audio_features=json.dumps(audio_features) if audio_features else None,
         )
 
     def _search_artist(self, name: str) -> str | None:
@@ -73,6 +74,11 @@ class SpotifyEnricher:
         # Normalize tempo from ~[40, 220] BPM to [0, 1]
         avg["tempo_norm"] = max(0.0, min(1.0, (avg.pop("tempo") - 40) / 180))
         return avg
+
+    def get_audio_features(self, spotify_id: str) -> dict | None:
+        """Fetch + average audio features for an artist we already know the ID for."""
+        top_tracks = self._get_top_tracks(spotify_id)
+        return self._avg_audio_features([t["id"] for t in top_tracks[:10]])
 
     def close(self) -> None:
         self._client.close()

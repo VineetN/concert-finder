@@ -35,14 +35,15 @@ def build_artist_vector(
     genre_str = ", ".join(genres) if genres else "unknown genre"
     text_vec = embed_texts([f"{name} — {genre_str}"])[0]
 
-    if not audio_features:
-        return text_vec
-
     keys = ["danceability", "energy", "valence", "acousticness", "instrumentalness", "speechiness", "tempo_norm"]
-    audio_vec = np.array([audio_features.get(k, 0.0) for k in keys], dtype=np.float32)
-    norm = np.linalg.norm(audio_vec)
-    if norm > 0:
-        audio_vec /= norm
+    if audio_features:
+        audio_vec = np.array([audio_features.get(k, 0.0) for k in keys], dtype=np.float32)
+        norm = np.linalg.norm(audio_vec)
+        if norm > 0:
+            audio_vec /= norm
+    else:
+        # Zero-pad so all vectors are the same dimension (384 text + 7 audio = 391)
+        audio_vec = np.zeros(len(keys), dtype=np.float32)
 
     combined = np.concatenate([text_vec * 0.8, audio_vec * 0.2])
     return combined / (np.linalg.norm(combined) + 1e-8)

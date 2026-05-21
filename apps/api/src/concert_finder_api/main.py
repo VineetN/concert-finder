@@ -12,9 +12,10 @@ load_dotenv()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Pre-warm the embedding model so the first scoring request isn't slow
+    from concert_finder_api.db import init_db
     from concert_finder_scoring.embeddings import _get_model
-    _get_model()
+    init_db()
+    _get_model()  # pre-warm so first scoring request isn't slow
     yield
 
 
