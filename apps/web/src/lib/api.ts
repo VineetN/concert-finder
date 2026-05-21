@@ -38,6 +38,14 @@ export async function fetchEvents(
   return res.json();
 }
 
+export async function syncUser(accessToken: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/user/sync`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) throw new Error(`Sync failed ${res.status}: ${await res.text()}`);
+}
+
 export async function fetchTasteMap(accessToken: string): Promise<{
   user_points: { x: number; y: number; label: string }[];
   event_points: { x: number; y: number; label: string; venue: string }[];
