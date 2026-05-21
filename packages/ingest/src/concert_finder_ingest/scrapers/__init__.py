@@ -1,4 +1,5 @@
 from .base import BaseScraper, RawEvent
+from .crocodile import CrocodileScraper
 from .neumos import NeumosScraper
 from .songkick import SongkickScraper
 
@@ -6,8 +7,8 @@ from .songkick import SongkickScraper
 ALL_SCRAPERS: list[type[BaseScraper]] = [
     SongkickScraper,
     NeumosScraper,
+    CrocodileScraper,
     # Add as built:
-    # CrocodileScraper,
     # ShowboxScraper,
     # TractorTavernScraper,
     # SunsetTavernScraper,
