@@ -2,7 +2,7 @@
 
 > Seattle live music ranked to your taste — not the algorithm's.
 
-Pulls upcoming Seattle shows, enriches every artist on the bill with Spotify metadata, clusters your listening history into 2–4 taste modes, and scores events by predicted enjoyment. Surfaces **safe bets** (strong match to your dominant taste) and **stretch picks** (strong match to a secondary taste, or artists adjacent to your library you haven't seen live).
+Pulls upcoming Seattle shows, enriches every artist on the bill with Spotify metadata and Last.fm genre data, clusters your listening history into 2–4 taste modes, and scores events by predicted enjoyment. Surfaces **safe bets** (strong match to your dominant taste) and **stretch picks** (strong match to a secondary taste). Includes a **Taste Map** — a UMAP projection of your top artists and upcoming headliners, coloured by taste cluster.
 
 ## Stack
 
@@ -18,6 +18,23 @@ Pulls upcoming Seattle shows, enriches every artist on the bill with Spotify met
 | Scheduling | APScheduler (in-process) |
 | Process mgmt | pm2 |
 | Auth | NextAuth v5 (Spotify provider) |
+| Genre enrichment | Last.fm API |
+| Explanations | HuggingFace Inference API (`Qwen/Qwen2.5-72B-Instruct`) |
+
+## Venues covered
+
+8 scrapers run nightly. Songkick aggregates shows across many Seattle venues; the remaining scrapers target specific clubs directly:
+
+| Scraper | Coverage |
+|---------|----------|
+| Songkick | Aggregator — broad Seattle show calendar |
+| Neumos | Neumos / Moe Bar |
+| Crocodile | The Crocodile |
+| Sunset Tavern | Sunset Tavern |
+| Showbox SoDo | Showbox SoDo |
+| Chop Suey | Chop Suey |
+| Tractor Tavern | Tractor Tavern |
+| Barboza | Barboza |
 
 ## Two-node setup
 
@@ -73,6 +90,12 @@ http://127.0.0.1:3000/api/auth/callback/spotify
 just api      # FastAPI on :8000
 just web      # Next.js on :3000
 just scrape   # run ingestion pipeline once (populates the DB)
+just worker   # start the APScheduler worker (nightly scrapes on Node A)
+
+# Quality
+just test
+just lint
+just fmt
 ```
 
 Open `http://127.0.0.1:3000`, sign in with Spotify, and click **Sync** to cluster your listening history. Events appear immediately after sync.
