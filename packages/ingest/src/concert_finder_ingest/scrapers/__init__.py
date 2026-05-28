@@ -8,6 +8,7 @@ from .showbox_market import ShowboxMarketScraper
 from .songkick import SongkickScraper
 from .stg import STGScraper
 from .sunset import SunsetTavernScraper
+from .ticketmaster import TicketmasterScraper
 from .tractor import TractorTavernScraper
 
 # Each scraper runs in isolation — one failure doesn't stop the others.
@@ -22,6 +23,7 @@ ALL_SCRAPERS: list[type[BaseScraper]] = [
     TractorTavernScraper,
     BarbozaScraper,
     STGScraper,
+    TicketmasterScraper,
 ]
 
 __all__ = ["BaseScraper", "RawEvent", "ALL_SCRAPERS"]

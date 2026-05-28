@@ -85,6 +85,7 @@ Fill in `.env` (read by FastAPI, worker, and scrapers):
 | `NEXTAUTH_SECRET` / `AUTH_SECRET` | Signs and encrypts the user session cookie — without this Auth.js refuses to start | Generate locally: `openssl rand -base64 32` — paste the same value into both variables |
 | `LASTFM_API_KEY` | Fetches crowd-sourced genre tags for artists — Spotify removed genre data from its API in Nov 2024, so this fills the gap | [Last.fm API account](https://www.last.fm/api/account/create) — free, no callback URL needed |
 | `HF_TOKEN` | Downloads the local embedding model without hitting rate limits; also powers the one-sentence "why this match" explanations via the free Inference API | [HuggingFace → Settings → Tokens](https://huggingface.co/settings/tokens) → New token (read access is enough) |
+| `TICKETMASTER_API_KEY` | Optional — covers WaMu Theater, Climate Pledge Arena, White River Amphitheatre, and all other Live Nation venues in the Seattle metro. Without it those venues are skipped. | [developer.ticketmaster.com](https://developer.ticketmaster.com) → My Apps → Consumer Key (free, 5,000 calls/day) |
 
 Fill in `apps/web/.env.local` with the same `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, `NEXTAUTH_SECRET`, and `AUTH_SECRET`. The `AUTH_URL` and `API_URL` are pre-filled in the example and work for local dev as-is.
 
