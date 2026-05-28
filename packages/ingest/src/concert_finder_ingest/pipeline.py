@@ -17,6 +17,36 @@ from .scrapers import ALL_SCRAPERS, RawEvent
 
 log = logging.getLogger(__name__)
 
+# Canonical venue names. Keys are lowercase aliases; values are the display name
+# used in the DB and UI. Keeps venue-name variants from different scrapers unified.
+_VENUE_CANONICAL: dict[str, str] = {
+    "tractor": "Tractor Tavern",
+    "showbox sodo": "Showbox SoDo",
+    "showbox at the market": "The Showbox",
+    "chateau ste michelle winery": "Chateau Ste. Michelle Winery",
+    "wamu theater": "WaMu Theater",
+    "marymoor live - presented by toyota": "Marymoor Live",
+    "moore theatre": "The Moore Theatre",
+    "neptune theatre": "The Neptune Theatre",
+    "paramount theatre": "The Paramount Theatre",
+    "5th avenue theatre": "The 5th Avenue Theatre",
+    "federal way paec": "Federal Way Performing Arts and Event Center",
+    "fisher pavilion at seattle center": "Fisher Pavilion, Seattle Center",
+    "fisher pavilion": "Fisher Pavilion, Seattle Center",
+    "benaroya hall - s. mark taper auditorium": "Benaroya Hall",
+    "s. mark taper auditorium, benaroya hall": "Benaroya Hall",
+    "taper auditorium": "Benaroya Hall",
+    "the tulalip amphitheatre": "Tulalip Amphitheatre",
+    "the vera project": "Vera Project",
+    "victory hall": "Victory Hall at The Boxyard",
+    "ballard homestead (abbey arts)": "Ballard Homestead",
+    "admiral theatre - wa": "Admiral Theatre",
+}
+
+
+def normalize_venue(venue: str) -> str:
+    return _VENUE_CANONICAL.get(venue.strip().lower(), venue.strip())
+
 
 def run_pipeline(spotify_token: str | None = None) -> None:
     """Full ingestion pass: scrape → deduplicate → enrich → write to DB."""
@@ -131,13 +161,14 @@ def _upsert_events(
         link_inserted = 0
 
         for raw, date, price_min, price_max in parsed:
-            event_id = _event_id(date, raw.venue, raw.headliner)
+            venue = normalize_venue(raw.venue)
+            event_id = _event_id(date, venue, raw.headliner)
 
             if session.get(Event, event_id) is None:
                 session.add(Event(
                     id=event_id,
                     date=date,
-                    venue=raw.venue,
+                    venue=venue,
                     ticket_url=raw.ticket_url,
                     price_min=price_min,
                     price_max=price_max,
