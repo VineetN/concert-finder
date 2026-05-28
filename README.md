@@ -56,8 +56,11 @@ If Node B is down, ingestion still runs.
 - [`just`](https://just.systems/man/en/packages.html)
 - Spotify developer app → [create one](https://developer.spotify.com/dashboard)
 - Last.fm API key → [create one](https://www.last.fm/api/account/create) (free, no callback needed)
+- HuggingFace account → [create a token](https://huggingface.co/settings/tokens) (free; enables match explanations and avoids rate limits on model downloads)
 
 ## Setup
+
+### 1. Clone and install
 
 ```bash
 git clone https://github.com/VineetN/concert-finder
@@ -65,40 +68,73 @@ cd concert-finder
 just install
 ```
 
-**Two env files are required** — one for the Python services, one for Next.js:
+### 2. Configure environment
+
+Two env files are required — one for Python services, one for Next.js:
 
 ```bash
-# 1. Root .env — read by FastAPI, worker, and scrapers
 cp .env.example .env
-# Fill in: SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, NEXTAUTH_SECRET,
-#          AUTH_SECRET (same as NEXTAUTH_SECRET), LASTFM_API_KEY
-
-# 2. apps/web/.env.local — read by Next.js
 cp apps/web/.env.local.example apps/web/.env.local
-# Fill in the same Spotify + auth values
 ```
 
-In your **Spotify app dashboard**, add this redirect URI:
+Fill in `.env` (read by FastAPI, worker, and scrapers):
+
+| Variable | Why it's needed | Where to get it |
+|----------|----------------|-----------------|
+| `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | User login via Spotify OAuth, plus nightly artist enrichment (name → metadata) | [Create a Spotify app](https://developer.spotify.com/dashboard) → Settings → copy Client ID and Secret |
+| `NEXTAUTH_SECRET` / `AUTH_SECRET` | Signs and encrypts the user session cookie — without this Auth.js refuses to start | Generate locally: `openssl rand -base64 32` — paste the same value into both variables |
+| `LASTFM_API_KEY` | Fetches crowd-sourced genre tags for artists — Spotify removed genre data from its API in Nov 2024, so this fills the gap | [Last.fm API account](https://www.last.fm/api/account/create) — free, no callback URL needed |
+| `HF_TOKEN` | Downloads the local embedding model without hitting rate limits; also powers the one-sentence "why this match" explanations via the free Inference API | [HuggingFace → Settings → Tokens](https://huggingface.co/settings/tokens) → New token (read access is enough) |
+
+Fill in `apps/web/.env.local` with the same `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, `NEXTAUTH_SECRET`, and `AUTH_SECRET`. The `AUTH_URL` and `API_URL` are pre-filled in the example and work for local dev as-is.
+
+### 3. Add the Spotify redirect URI
+
+In your [Spotify app dashboard](https://developer.spotify.com/dashboard), add this redirect URI:
+
 ```
 http://127.0.0.1:3000/api/auth/callback/spotify
 ```
+
 > Use `127.0.0.1`, not `localhost` — Spotify's OAuth explicitly blocks `localhost`.
 
-## Running (dev)
+### 4. First run
+
+Run these in order — the scraper must populate the DB before the API has anything to serve:
 
 ```bash
-just api      # FastAPI on :8000
-just web      # Next.js on :3000
-just scrape   # run ingestion pipeline once (populates the DB)
-just worker   # start the APScheduler worker (nightly scrapes on Node A)
+# Terminal 1 — populate the database (takes ~2 min on first run)
+just scrape
 
-# Quality
+# Terminal 2 — start the API
+just api
+
+# Terminal 3 — start the frontend
+just web
+```
+
+Open `http://127.0.0.1:3000`, sign in with Spotify, and click **Sync**. The sync clusters your listening history and takes ~10 seconds. Events with scores appear immediately after.
+
+### 5. Keep events fresh (optional)
+
+```bash
+just worker   # starts the APScheduler worker — scrapes nightly at 3am PT
+```
+
+Or re-run `just scrape` manually whenever you want fresh data.
+
+## Dev commands
+
+```bash
+just api      # FastAPI on :8000 with hot reload
+just web      # Next.js on :3000
+just scrape   # run ingestion pipeline once
+just worker   # start nightly APScheduler worker
+
 just test
 just lint
 just fmt
 ```
-
-Open `http://127.0.0.1:3000`, sign in with Spotify, and click **Sync** to cluster your listening history. Events appear immediately after sync.
 
 ## Project structure
 

@@ -88,6 +88,11 @@ def _resolve_artists(names: set[str], spotify_token: str | None) -> dict[str, st
                 if artist is None:
                     # Stub: no Spotify data; embedding will be text-only
                     artist = Artist(id=_slugify(name), name=name)
+                # Guard: same Spotify ID may already be in DB or added this run
+                existing_by_id = session.get(Artist, artist.id)
+                if existing_by_id is not None:
+                    known[name] = existing_by_id
+                    continue
                 known[name] = artist
                 session.add(artist)
 
