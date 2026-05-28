@@ -35,13 +35,17 @@ def score_event(
     """
     Score an event against all of a user's taste modes.
 
-    Final score = max cosine_similarity(artist_vec, mode_centroid) × billing_weight,
-    taken over all (artist, mode) pairs on the bill.
+    Dominant and non-dominant modes are tracked separately so that a strong
+    match to a secondary taste mode can surface as a Stretch Pick even when
+    the dominant mode also scores decently (but below the Safe Bet threshold).
     """
-    best_sim = 0.0
-    best_artist = ""
-    best_mode_label = ""
-    best_mode_dominant = False
+    best_dom_sim = 0.0
+    best_dom_artist = ""
+    best_dom_label = ""
+
+    best_sec_sim = 0.0
+    best_sec_artist = ""
+    best_sec_label = ""
 
     for ea, artist in bill:
         if artist.embedding is None:
@@ -54,18 +58,49 @@ def score_event(
             denom = np.linalg.norm(artist_vec) * np.linalg.norm(centroid) + 1e-8
             sim = float(np.dot(artist_vec, centroid) / denom) * weight
 
-            if sim > best_sim:
-                best_sim = sim
-                best_artist = artist.name
-                best_mode_label = mode.get("label", "?")
-                best_mode_dominant = mode.get("is_dominant", False)
+            if mode.get("is_dominant", False):
+                if sim > best_dom_sim:
+                    best_dom_sim = sim
+                    best_dom_artist = artist.name
+                    best_dom_label = mode.get("label", "?")
+            else:
+                if sim > best_sec_sim:
+                    best_sec_sim = sim
+                    best_sec_artist = artist.name
+                    best_sec_label = mode.get("label", "?")
 
+    # Safe Bet takes priority; Stretch Pick fires independently of dominant score
+    if best_dom_sim > 0.73:
+        return MatchResult(
+            event_id=event.id,
+            score=round(best_dom_sim, 4),
+            category=EventCategory.SAFE_BET,
+            driver_artist=best_dom_artist,
+            driver_mode=best_dom_label,
+        )
+    if best_sec_sim > 0.70:
+        return MatchResult(
+            event_id=event.id,
+            score=round(best_sec_sim, 4),
+            category=EventCategory.STRETCH_PICK,
+            driver_artist=best_sec_artist,
+            driver_mode=best_sec_label,
+        )
+    # Regular — report whichever mode scored higher
+    if best_dom_sim >= best_sec_sim:
+        return MatchResult(
+            event_id=event.id,
+            score=round(best_dom_sim, 4),
+            category=EventCategory.REGULAR,
+            driver_artist=best_dom_artist,
+            driver_mode=best_dom_label,
+        )
     return MatchResult(
         event_id=event.id,
-        score=round(best_sim, 4),
-        category=_classify(best_sim, best_mode_dominant),
-        driver_artist=best_artist,
-        driver_mode=best_mode_label,
+        score=round(best_sec_sim, 4),
+        category=EventCategory.REGULAR,
+        driver_artist=best_sec_artist,
+        driver_mode=best_sec_label,
     )
 
 

@@ -158,6 +158,35 @@ class TestScoreEvent:
         result = score_event(_make_event("my-event-id"), bill, _taste_modes(vec))
         assert result.event_id == "my-event-id"
 
+    def test_stretch_pick_fires_independently_of_dominant_score(self):
+        """Non-dominant mode fires Stretch Pick even when dominant also scores (but < 0.73)."""
+        dom_vec = [1.0, 0.0, 0.0]
+        sec_vec = [0.0, 1.0, 0.0]
+        artist_vec = [0.6, 0.8, 0.0]  # closer to sec_vec; dom sim≈0.6, sec sim≈0.8
+        bill = [(_make_ea(0), _make_artist("Artist", _make_vec(artist_vec)))]
+        modes = {
+            "0": {"centroid": dom_vec, "label": "dominant", "is_dominant": True},
+            "1": {"centroid": sec_vec, "label": "secondary", "is_dominant": False},
+        }
+        result = score_event(_make_event(), bill, modes)
+        # Dominant score ≈ 0.60 (below 0.73 Safe Bet), secondary ≈ 0.80 (above 0.70)
+        assert result.category == EventCategory.STRETCH_PICK
+        assert result.driver_mode == "secondary"
+
+    def test_safe_bet_takes_priority_over_stretch(self):
+        """Safe Bet wins even when a non-dominant mode also scores above 0.70."""
+        dom_vec = [1.0, 0.0, 0.0]
+        sec_vec = [0.0, 1.0, 0.0]
+        artist_vec = [0.8, 0.6, 0.0]  # dom sim≈0.8 (Safe Bet), sec sim≈0.6
+        bill = [(_make_ea(0), _make_artist("Artist", _make_vec(artist_vec)))]
+        modes = {
+            "0": {"centroid": dom_vec, "label": "dominant", "is_dominant": True},
+            "1": {"centroid": sec_vec, "label": "secondary", "is_dominant": False},
+        }
+        result = score_event(_make_event(), bill, modes)
+        assert result.category == EventCategory.SAFE_BET
+        assert result.driver_mode == "dominant"
+
     def test_score_rounded_to_4_decimal_places(self):
         # Use orthogonal vectors to get a deterministic non-trivial sim
         v1 = [0.6, 0.8, 0.0]
